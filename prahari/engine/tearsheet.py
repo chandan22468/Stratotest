@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from api.models.response import (
     BacktestResponse, PerformanceMetrics,
-    TradeResult, CandleData
+    TradeResult, CandleData, VbtAnalytics, MonteCarloData
 )
 
 
@@ -25,6 +25,7 @@ def generate_tearsheet(
     equity   = results["equity"]
     indicators = results["indicators"]
     zones    = results["zones"]
+    vbt_raw  = results.get("vbt_analytics", {})
 
     # ── Performance metrics ────────────────────────────────────
     metrics = _calculate_metrics(trades, equity)
@@ -37,6 +38,9 @@ def generate_tearsheet(
 
     # ── Confidence level ───────────────────────────────────────
     confidence, confidence_reason = _assess_confidence(len(trades), period)
+
+    # ── Build VbtAnalytics model (None if vbt not available) ──
+    vbt_analytics = _build_vbt_model(vbt_raw)
 
     # ── Warnings ───────────────────────────────────────────────
     warnings = []
@@ -60,7 +64,8 @@ def generate_tearsheet(
         zones            = zones,
         warnings         = warnings,
         confidence       = confidence,
-        confidence_reason = confidence_reason
+        confidence_reason = confidence_reason,
+        vbt_analytics    = vbt_analytics
     )
 
 
@@ -205,3 +210,39 @@ def _assess_confidence(num_trades: int, period: str) -> tuple:
         return "medium", f"{num_trades} trades — acceptable but more data preferred"
     else:
         return "high", f"{num_trades} trades — statistically reliable results"
+
+
+def _build_vbt_model(vbt_raw: dict):
+    """
+    Convert raw vbt_analytics dict (from vbt_engine.py) into the
+    VbtAnalytics Pydantic model. Returns None if vbt_raw is empty,
+    ensuring graceful degradation when vectorbt is not installed.
+    """
+    if not vbt_raw:
+        return None
+
+    try:
+        mc_raw = vbt_raw.get("monte_carlo", {})
+        monte_carlo = None
+        if mc_raw and "p10" in mc_raw:
+            from api.models.response import MonteCarloData
+            monte_carlo = MonteCarloData(
+                p10=mc_raw["p10"],
+                p50=mc_raw["p50"],
+                p90=mc_raw["p90"],
+                n_sims=mc_raw.get("n_sims", 100),
+            )
+
+        return VbtAnalytics(
+            sortino_ratio      = vbt_raw.get("sortino_ratio"),
+            omega_ratio        = vbt_raw.get("omega_ratio"),
+            expectancy         = vbt_raw.get("expectancy"),
+            best_trade_pct     = vbt_raw.get("best_trade_pct"),
+            worst_trade_pct    = vbt_raw.get("worst_trade_pct"),
+            avg_trade_duration = vbt_raw.get("avg_trade_duration"),
+            vbt_equity_curve   = vbt_raw.get("vbt_equity_curve"),
+            monte_carlo        = monte_carlo,
+        )
+    except Exception as e:
+        print(f"[tearsheet] Failed to build VbtAnalytics model: {e}")
+        return None

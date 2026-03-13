@@ -1,6 +1,7 @@
 # api/routes/backtest.py
 import traceback
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from api.models.request import BacktestRequest
 from api.models.response import BacktestResponse
 from agent.parser import parse_strategy
@@ -17,7 +18,19 @@ async def backtest(request: BacktestRequest):
         # Step 1 — LLM parses strategy
         parsed_rules = await parse_strategy(request.user_input)
 
-        # Step 2 — Resolve ticker (LLM detected or user provided)
+        # Step 2 — Check if clarification is needed
+        if parsed_rules.get("clarification_needed"):
+            return JSONResponse(content={
+                "strategy_name":        parsed_rules.get("strategy_name", "Strategy"),
+                "ticker":               parsed_rules.get("ticker", "AUTO"),
+                "timeframe":            parsed_rules.get("interval", "1h"),
+                "period":               parsed_rules.get("period", "1y"),
+                "parsed_rules":         parsed_rules,
+                "clarification_needed": True,
+                "question":             parsed_rules.get("question")
+            })
+
+        # Step 3 — Resolve ticker (LLM detected or user provided)
         ticker = request.ticker
         if ticker in ("AUTO", "", None):
             ticker = parsed_rules.get("ticker")
@@ -27,17 +40,11 @@ async def backtest(request: BacktestRequest):
                     detail="Could not detect asset. Please mention asset name e.g. 'nifty', 'bitcoin', 'gold'"
                 )
 
-        # Step 3 — Use LLM interval/period if user left defaults
-        timeframe = request.timeframe.value
-        period    = request.period.value
+        # Step 4 — Use LLM interval/period
+        timeframe = parsed_rules.get("interval", "1h")
+        period    = parsed_rules.get("period", "1y")
 
-        # Override with LLM detected values if available
-        if parsed_rules.get("interval"):
-            timeframe = parsed_rules["interval"]
-        if parsed_rules.get("period"):
-            period = parsed_rules["period"]
-
-        # Step 4 — Get warnings
+        # Step 5 — Get warnings
         warnings = get_warnings(timeframe, period)
 
         # Step 5 — Fetch data

@@ -16,6 +16,7 @@ from engine.strategies.strategies import (
     CHoCHStrategy,
     BOSPullbackStrategy
 )
+from engine.vbt_engine import run_vbt_analysis
 
 # ── Strategy registry ─────────────────────────────────────────
 # To add a new strategy:
@@ -67,5 +68,16 @@ def run_backtest(
     # Instantiate and run
     strategy = StrategyClass(rules=rules, market=market)
     results  = strategy.run(df=df, initial_capital=initial_capital)
+
+    # ── vectorbt enhanced analytics (purely additive) ──────────
+    signals = getattr(strategy, "_last_signals", None)
+    if signals is not None:
+        results["vbt_analytics"] = run_vbt_analysis(
+            df=df,
+            signals=signals,
+            initial_capital=initial_capital
+        )
+    else:
+        results["vbt_analytics"] = {}
 
     return results

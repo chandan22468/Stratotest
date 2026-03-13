@@ -98,6 +98,7 @@ class BaseStrategy(ABC):
         Returns all trades + equity curve
         """
         signals    = self.generate_signals(df)
+        self._last_signals = signals  # stored for vectorbt analytics
         trades     = []
         equity     = [initial_capital]
         capital    = initial_capital

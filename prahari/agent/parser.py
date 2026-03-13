@@ -7,7 +7,7 @@ from groq import Groq
 from agent.prompts import SYSTEM_PROMPT
 
 # ── PASTE YOUR GROQ API KEY HERE ─────────────────────────────
-GROQ_API_KEY = "YOUR_GROQ_KEY_HERE"
+GROQ_API_KEY = "your api key"
 # Get free key at: https://console.groq.com
 # ─────────────────────────────────────────────────────────────
 
@@ -16,42 +16,70 @@ client = Groq(api_key=GROQ_API_KEY)
 
 async def parse_strategy(user_input: str) -> dict:
     """
-    Converts plain English strategy to structured JSON
-    Uses Gemini-optimized prompt for better accuracy
+    Tries AI first, then falls back to regex for common patterns if AI is down/rate-limited.
     """
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=1000,
-            temperature=0.1,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_input}
-            ]
-        )
+    ui_lower = user_input.lower()
+    
+    # ── Try AI First ──────────────────────────────────────────
+    models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+    last_error = None
+    parsed = None
+    
+    for model in models:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=1000,
+                temperature=0.1,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_input}
+                ]
+            )
+            raw_text = response.choices[0].message.content.strip()
+            raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(raw_text)
+            break
+        except Exception as e:
+            last_error = e
+            if "429" in str(e): continue
+            else: break
+            
+    if parsed:
+        try:
+            # Normalize to unified format engine expects
+            parsed = _normalize(parsed)
 
-        raw_text = response.choices[0].message.content.strip()
+            # Validate required fields (only if clarification NOT needed)
+            if not parsed.get("clarification_needed"):
+                required = ["strategy_id", "ticker", "market", "interval", "period"]
+                for field in required:
+                    if field not in parsed:
+                        # If this happens, LLM hallucinated the format
+                        raise ValueError(f"Missing required field: {field}")
+            return parsed
+        except Exception as e:
+            last_error = e # Store error for fallback message
+            parsed = None # Ensure fallback is triggered
 
-        # Clean any accidental markdown
-        raw_text = raw_text.replace("```json", "").replace("```", "").strip()
-
-        parsed = json.loads(raw_text)
-
-        # Normalize to unified format engine expects
-        parsed = _normalize(parsed)
-
-        # Validate required fields
-        required = ["strategy_id", "ticker", "market", "interval", "period"]
-        for field in required:
-            if field not in parsed:
-                raise ValueError(f"Missing required field: {field}")
-
-        return parsed
-
-    except json.JSONDecodeError as e:
-        raise ValueError(f"LLM returned invalid JSON: {e}")
-    except Exception as e:
-        raise ValueError(f"Strategy parsing failed: {e}")
+    # ── Safety Net: Regex Fallback ────────────────────────────
+    # If LLM fails (rate limit), try to parse very basic strategies
+    if "rsi" in ui_lower:
+        return _normalize({
+            "strategy_id": "rsi_reversal", "strategy_name": "RSI Strategy (Fallback)",
+            "ticker": "^NSEI", "market": "india_equity", "interval": "1h", "period": "2y",
+            "strategy_params": {"indicator": "RSI", "period": 14, "direction": "bullish"},
+            "notes": "⚠️ LLM Rate Limited. Using default RSI parameters on Nifty (2 Years)."
+        })
+    elif "ema" in ui_lower or "ma" in ui_lower:
+        return _normalize({
+            "strategy_id": "ma_crossover", "strategy_name": "MA Crossover (Fallback)",
+            "ticker": "^NSEI", "market": "india_equity", "interval": "1h", "period": "2y",
+            "strategy_params": {"indicator": "EMA", "fast_period": 50, "slow_period": 200},
+            "notes": "⚠️ LLM Rate Limited. Using default 50/200 EMA Cross on Nifty (2 Years)."
+        })
+        
+    raise ValueError(f"AI is currently busy (Rate Limit). Please try again in a few minutes or provide a simpler strategy (e.g. 'RSI strategy'). Original error: {last_error}")
 
 
 def _normalize(parsed: dict) -> dict:

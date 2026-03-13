@@ -1,9 +1,5 @@
-# api/models/response.py
-# All response models — what frontend receives
-
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-
 
 class TradeResult(BaseModel):
     trade_number:  int
@@ -13,12 +9,11 @@ class TradeResult(BaseModel):
     exit_price:    float
     sl_price:      float
     tp_price:      float
-    result:        str       # "win" or "loss"
-    pnl:           float     # profit/loss in INR
-    pnl_pct:       float     # profit/loss in %
-    rr_achieved:   float     # actual RR ratio achieved
-    friction_cost: float     # total cost of trade
-
+    result:        str
+    pnl:           float
+    pnl_pct:       float
+    rr_achieved:   float
+    friction_cost: float
 
 class PerformanceMetrics(BaseModel):
     total_trades:        int
@@ -40,7 +35,6 @@ class PerformanceMetrics(BaseModel):
     total_friction_cost: float
     return_without_friction: float
 
-
 class CandleData(BaseModel):
     time:   str
     open:   float
@@ -49,33 +43,38 @@ class CandleData(BaseModel):
     close:  float
     volume: float
 
+class MonteCarloData(BaseModel):
+    p10:    List[float]
+    p50:    List[float]
+    p90:    List[float]
+    n_sims: int
+
+class VbtAnalytics(BaseModel):
+    sortino_ratio:       Optional[float] = None
+    omega_ratio:         Optional[float] = None
+    expectancy:          Optional[float] = None
+    best_trade_pct:      Optional[float] = None
+    worst_trade_pct:     Optional[float] = None
+    avg_trade_duration:  Optional[float] = None
+    vbt_equity_curve:    Optional[List[Dict]]= None
+    monte_carlo:         Optional[MonteCarloData] = None
 
 class BacktestResponse(BaseModel):
-    # Strategy info
     strategy_name:   str
     ticker:          str
     timeframe:       str
     period:          str
     parsed_rules:    Dict[str, Any]
-
-    # Performance
-    metrics:         PerformanceMetrics
-
-    # Trade log
-    trades:          List[TradeResult]
-
-    # Chart data (sent to frontend for rendering)
-    candles:         List[CandleData]
-    equity_curve:    List[Dict]          # [{time, value}]
-    drawdown_curve:  List[Dict]          # [{time, value}]
-
-    # Indicator data for chart
-    indicators:      Dict[str, List[Dict]]  # {ema_50: [{time, value}]}
-
-    # Zones for chart
-    zones:           Dict[str, List[Dict]]  # {order_blocks: [{top, bottom, start, end}]}
-
-    # Warnings and confidence
-    warnings:        List[str]
-    confidence:      str             # "low" / "medium" / "high"
-    confidence_reason: str
+    clarification_needed: bool = False
+    question:             Optional[str] = None
+    metrics:         Optional[PerformanceMetrics] = None
+    trades:          List[Any] = Field(default_factory=list)
+    candles:         List[Any] = Field(default_factory=list)
+    equity_curve:    List[Any] = Field(default_factory=list)
+    drawdown_curve:  List[Any] = Field(default_factory=list)
+    indicators:      Dict[str, Any] = Field(default_factory=dict)
+    zones:           Dict[str, Any] = Field(default_factory=dict)
+    warnings:        List[str] = Field(default_factory=list)
+    confidence:      Optional[str] = None
+    confidence_reason: Optional[str] = None
+    vbt_analytics:   Optional[VbtAnalytics] = None

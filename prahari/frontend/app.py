@@ -22,63 +22,85 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════
 
 def render_price_chart(data):
+    from plotly.subplots import make_subplots
     candles    = data["candles"]
     trades     = data["trades"]
     indicators = data["indicators"]
 
-    fig = go.Figure()
+    # Create subplots: Price (row 1) and Volume (row 2)
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True, 
+        vertical_spacing=0.03, 
+        row_heights=[0.8, 0.2]
+    )
 
-    # Candlestick
+    times  = [c["time"]  for c in candles]
+    opens  = [c["open"]  for c in candles]
+    highs  = [c["high"]  for c in candles]
+    lows   = [c["low"]   for c in candles]
+    closs  = [c["close"] for c in candles]
+    vols   = [c["volume"] for c in candles]
+
+    # 1. Candlestick
     fig.add_trace(go.Candlestick(
-        x    =[c["time"]  for c in candles],
-        open =[c["open"]  for c in candles],
-        high =[c["high"]  for c in candles],
-        low  =[c["low"]   for c in candles],
-        close=[c["close"] for c in candles],
+        x=times, open=opens, high=highs, low=lows, close=closs,
         name="Price",
         increasing_line_color="#26a69a",
         decreasing_line_color="#ef5350"
-    ))
+    ), row=1, col=1)
 
-    # Indicator lines (EMA, SMA etc)
-    colors = ["#ff9800", "#2196f3", "#9c27b0", "#4caf50"]
+    # 2. Volume Bars
+    vol_colors = ["#26a69a" if closs[i] >= opens[i] else "#ef5350" for i in range(len(closs))]
+    fig.add_trace(go.Bar(
+        x=times, y=vols, 
+        name="Volume", 
+        marker_color=vol_colors,
+        opacity=0.4
+    ), row=2, col=1)
+
+    # 3. Indicator lines
+    colors = ["#ff9800", "#2196f3", "#9c27b0", "#e91e63"]
     for idx, (name, series) in enumerate(indicators.items()):
         if series:
             fig.add_trace(go.Scatter(
                 x   =[s["time"]  for s in series],
                 y   =[s["value"] for s in series],
                 name=name,
-                line=dict(color=colors[idx % len(colors)], width=1.5)
-            ))
+                line=dict(color=colors[idx % len(colors)], width=1.2)
+            ), row=1, col=1)
 
-    # Trade entry markers (green triangle up)
-    entry_times  = [t["entry_time"]  for t in trades]
-    entry_prices = [t["entry_price"] for t in trades]
-    fig.add_trace(go.Scatter(
-        x=entry_times, y=entry_prices,
-        mode="markers",
-        name="Entry",
-        marker=dict(symbol="triangle-up", color="#26a69a", size=12)
-    ))
-
-    # Trade exit markers (green = win, red = loss)
-    for trade in trades:
-        color = "#26a69a" if trade["result"] == "win" else "#ef5350"
-        fig.add_trace(go.Scatter(
-            x=[trade["exit_time"]],
-            y=[trade["exit_price"]],
-            mode="markers",
-            showlegend=False,
-            marker=dict(symbol="triangle-down", color=color, size=12)
-        ))
+    # 4. Professional Trade Annotations
+    if trades:
+        for t in trades:
+            # Entry
+            fig.add_annotation(
+                x=t["entry_time"], y=t["entry_price"],
+                text="B", showarrow=True, arrowhead=1, ax=0, ay=25,
+                bgcolor="#26a69a", font=dict(color="white", size=10),
+                row=1, col=1
+            )
+            # Exit
+            color = "#26a69a" if t["result"] == "win" else "#ef5350"
+            fig.add_annotation(
+                x=t["exit_time"], y=t["exit_price"],
+                text="S", showarrow=True, arrowhead=1, ax=0, ay=-25,
+                bgcolor=color, font=dict(color="white", size=10),
+                row=1, col=1
+            )
 
     fig.update_layout(
         template="plotly_dark",
-        height=520,
+        height=600,
         xaxis_rangeslider_visible=False,
-        title=f"{data['ticker']} — {data['timeframe']} — {data['strategy_name']}",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02)
+        title=f"<b>{data['ticker']}</b> | {data['timeframe']} | {data['strategy_name']}",
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
+    # Hide volume axis labels
+    fig.update_yaxes(title_text="Price", row=1, col=1)
+    fig.update_yaxes(title_text="Vol", row=2, col=1)
+    
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -101,6 +123,18 @@ def render_equity_curve(data):
         title="💰 Equity Curve",
         yaxis_title="Portfolio Value (₹)"
     )
+
+    # Add vbt comparison if available
+    vbt = data.get("vbt_analytics")
+    if vbt and vbt.get("vbt_equity_curve"):
+        veq = vbt["vbt_equity_curve"]
+        fig.add_trace(go.Scatter(
+            x=[v["time"] for v in veq],
+            y=[v["value"] for v in veq],
+            line=dict(color="#ff9800", width=1, dash="dash"),
+            name="vectorbt Comparison"
+        ))
+
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -143,6 +177,60 @@ def render_trade_log(data):
     ]], use_container_width=True)
 
 
+def render_monte_carlo(data):
+    vbt = data.get("vbt_analytics")
+    if not vbt or not vbt.get("monte_carlo"):
+        st.info("No Monte Carlo simulation data available")
+        return
+
+    mc = vbt["monte_carlo"]
+    p10, p50, p90 = mc["p10"], mc["p50"], mc["p90"]
+    steps = list(range(len(p50)))
+
+    fig = go.Figure()
+
+    # Fill between p10 and p90
+    fig.add_trace(go.Scatter(
+        x=steps + steps[::-1],
+        y=p90 + p10[::-1],
+        fill='toself',
+        fillcolor='rgba(38,166,154,0.1)',
+        line=dict(color='rgba(255,255,255,0)'),
+        hoverinfo="skip",
+        showlegend=False,
+        name='P10-P90 Range'
+    ))
+
+    fig.add_trace(go.Scatter(x=steps, y=p50, line=dict(color='#26a69a', width=3), name='P50 (Median)'))
+    fig.add_trace(go.Scatter(x=steps, y=p90, line=dict(color='#26a69a', width=1, dash='dot'), name='P90 (Best)'))
+    fig.add_trace(go.Scatter(x=steps, y=p10, line=dict(color='#ef5350', width=1, dash='dot'), name='P10 (Worst)'))
+
+    fig.update_layout(
+        template="plotly_dark", height=400,
+        title=f"🎲 Monte Carlo Simulation ({mc['n_sims']} iterations)",
+        xaxis_title="Days",
+        yaxis_title="Projected Capital (₹)"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_vbt_metrics(data):
+    vbt = data.get("vbt_analytics")
+    if not vbt:
+        return
+
+    st.markdown("### 🧬 Institutional Analytics (Powered by vectorbt)")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Sortino Ratio", vbt.get("sortino_ratio") or "0.0")
+    c2.metric("Omega Ratio", vbt.get("omega_ratio") or "0.0")
+    c3.metric("Expectancy", f"₹{vbt.get('expectancy', 0):,.2f}")
+    c4.metric("Avg Duration", f"{vbt.get('avg_trade_duration', 0)} bars")
+
+    bc1, bc2 = st.columns(2)
+    bc1.metric("Best Trade %", f"{vbt.get('best_trade_pct', 0)}%", delta_color="normal")
+    bc2.metric("Worst Trade %", f"{vbt.get('worst_trade_pct', 0)}%", delta_color="inverse")
+
+
 # ══════════════════════════════════════════════════════════════
 # MAIN UI
 # ══════════════════════════════════════════════════════════════
@@ -154,13 +242,17 @@ st.divider()
 
 # ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Configuration")
-    ticker    = st.text_input("Ticker", value="RELIANCE.NS",
-                              help="NSE: RELIANCE.NS | Index: ^NSEI | Crypto: BTC-USD")
-    timeframe = st.selectbox("Timeframe", ["5m","15m","30m","1h","4h","1d"], index=3)
-    period    = st.selectbox("Backtest Period", ["1y","2y","3y","5y"], index=1)
-    capital   = st.number_input("Initial Capital (₹)", value=100000, step=10000)
-    market    = st.selectbox("Market", ["india_equity","us_equity","crypto","forex"])
+    st.header("⚙️ Status")
+    
+    # API status check
+    try:
+        r = requests.get(f"{API_URL}/health", timeout=2)
+        if r.status_code == 200:
+            st.success("✅ API Connected")
+        else:
+            st.error("❌ API Error")
+    except:
+        st.error("❌ API Offline")
 
     st.divider()
     st.markdown("**📋 Quick Strategies**")
@@ -171,25 +263,11 @@ with st.sidebar:
         ("RSI Reversal",  "Buy when RSI drops below 30 and bounces back, SL below swing low, 1:2 RR"),
         ("Order Block",   "Buy at bullish order block, SL below the OB, 1:3 RR"),
         ("FVG Entry",     "Buy when price fills bullish fair value gap, SL below FVG, 1:2 RR"),
-        ("Fibonacci",     "Buy at 0.618 fibonacci level in uptrend, SL below swing low, 1:2 RR"),
-        ("BOS Pullback",  "Buy after break of structure pullback, SL below BOS level, 1:2 RR"),
     ]
 
     for label, example in examples:
         if st.button(label, use_container_width=True):
             st.session_state["prefill"] = example
-
-    st.divider()
-
-    # API status check
-    try:
-        r = requests.get(f"{API_URL}/health", timeout=2)
-        if r.status_code == 200:
-            st.success("✅ API Connected")
-        else:
-            st.error("❌ API Error")
-    except:
-        st.error("❌ API Offline — run: uvicorn main:app --reload")
 
 # ── Session state init ────────────────────────────────────────
 if "messages" not in st.session_state:
@@ -243,17 +321,20 @@ if prompt:
                 st.stop()
 
         # Step 2 — Run backtest
-        with st.spinner("⚡ Running backtest with realistic friction modelling..."):
+        with st.spinner("⚡ Running backtest..."):
             try:
+                # Concatenate messages for context
+                full_input = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state["messages"]])
+                
                 bt_resp = requests.post(
                     f"{API_URL}/backtest",
                     json={
-                        "user_input":      prompt,
-                        "ticker":          ticker,
-                        "timeframe":       timeframe,
-                        "period":          period,
-                        "initial_capital": capital,
-                        "market":          market
+                        "user_input":      full_input,
+                        "ticker":          "AUTO",
+                        "timeframe":       "1h",
+                        "period":          "1y",
+                        "initial_capital": 100000,
+                        "market":          "india_equity"
                     },
                     timeout=120
                 )
@@ -264,6 +345,12 @@ if prompt:
             except Exception as e:
                 st.error(f"Backtest error: {e}")
                 st.stop()
+
+        # Step 3 — Handle Clarification
+        if data.get("clarification_needed"):
+            # Add assistant choice to chat history
+            st.session_state["messages"].append({"role": "assistant", "content": data['question']})
+            st.rerun()  # Rerun to show the question in the chat flow
 
         # ── Warnings ──────────────────────────────────────────
         for w in data.get("warnings", []):
@@ -297,11 +384,12 @@ if prompt:
 
         # ── Charts ────────────────────────────────────────────
         st.divider()
-        tab1, tab2, tab3, tab4 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📈 Price Chart",
             "💰 Equity Curve",
             "📉 Drawdown",
-            "📋 Trade Log"
+            "📋 Trade Log",
+            "🎲 Risk Analysis"
         ])
 
         with tab1:
@@ -312,6 +400,12 @@ if prompt:
             render_drawdown(data)
         with tab4:
             render_trade_log(data)
+        with tab5:
+            render_monte_carlo(data)
+
+        # ── vectorbt metrics ──────────────────────────────────
+        st.divider()
+        render_vbt_metrics(data)
 
         # ── Friction comparison (your killer feature) ─────────
         st.divider()
@@ -330,11 +424,20 @@ if prompt:
 
         # ── Save to chat history ──────────────────────────────
         summary = (
-            f"✅ **{data['strategy_name']}** on {ticker} | "
-            f"{m['total_trades']} trades | "
-            f"Win: {m['win_rate']}% | "
-            f"Return: {m['total_return_pct']}% | "
-            f"Sharpe: {m['sharpe_ratio']} | "
-            f"Max DD: {m['max_drawdown_pct']}%"
+            f"✅ **{data['strategy_name']}** on {data['ticker']}\n"
+            f"📈 Return: **{m['total_return_pct']}%** | Sharpe: **{m['sharpe_ratio']}** | Trades: **{m['total_trades']}**"
         )
         st.session_state["messages"].append({"role": "assistant", "content": summary})
+        
+        # ── Suggested Actions ─────────────────────────────────
+        st.markdown("##### 💡 Suggested Next Steps")
+        ac1, ac2, ac3 = st.columns(3)
+        if ac1.button("Try on 15m", key=f"btn_15m_{prompt}"):
+            st.session_state["prefill"] = f"{prompt} on 15m timeframe"
+            st.rerun()
+        if ac2.button("Try on Nifty", key=f"btn_nifty_{prompt}"):
+            st.session_state["prefill"] = f"{prompt} on nifty"
+            st.rerun()
+        if ac3.button("Change Asset", key=f"btn_asset_{prompt}"):
+            st.session_state["prefill"] = f"{prompt} but change the asset"
+            st.rerun()
