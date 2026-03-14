@@ -177,6 +177,15 @@ class BaseStrategy(ABC):
                         "tp":          tp_price
                     }
 
+        if not trades:
+            return {
+                "trades": [],
+                "equity": [initial_capital] * len(df),
+                "indicators": self.get_indicators(df),
+                "zones": self.get_zones(df),
+                "warning": "Zero valid trades were executed by this strategy on this timeframe."
+            }
+
         return {
             "trades":     trades,
             "equity":     equity,

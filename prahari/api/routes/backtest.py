@@ -133,6 +133,10 @@ async def backtest(request: BacktestRequest):
         # Step 9 — Generate AI Strategy Insight (Advanced Upgrade)
         response.ai_insight = await generate_ai_insight(results)
 
+        # Check for zero trade warning from the base engine
+        if results.get("warning"):
+            warnings.append(results["warning"])
+
         response.warnings = warnings + response.warnings
         return response
 

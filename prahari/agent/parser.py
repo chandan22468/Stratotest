@@ -1,12 +1,16 @@
 # agent/parser.py
-# Groq LLM parser — uses AsyncGroq for non-blocking execution
+# Gemini LLM parser — uses google-generativeai for non-blocking execution
 # Handles Universal JSON DSL logic
 
 import json
 import os
 import hashlib
-from groq import AsyncGroq
+from google import genai
+from google.genai import types
 from agent.prompts import SYSTEM_PROMPT, AI_STRATEGIST_PROMPT
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Performance Caching ──────────────────────────────────────
 LLM_CACHE_DIR = os.path.join(os.getcwd(), ".cache", "llm")
@@ -17,9 +21,14 @@ def _get_cache_path(key_data: str, prefix: str) -> str:
     return os.path.join(LLM_CACHE_DIR, f"{prefix}_{h}.json")
 
 # ── Load API Key from Environment ────────────────────────────
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-client = AsyncGroq(api_key=GROQ_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
+# Initialize client globally
+client = None
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    print("[parser.py] WARNING: GEMINI_API_KEY is not set.")
 
 async def generate_ai_insight(results: dict) -> str:
     """
@@ -55,13 +64,11 @@ async def generate_ai_insight(results: dict) -> str:
 
     # 3. Call LLM (Async)
     try:
-        response = await client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            max_tokens=250,
-            temperature=0.7,
-            messages=[{"role": "user", "content": prompt_user_content}]
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt_user_content,
         )
-        insight = response.choices[0].message.content.strip()
+        insight = response.text.strip()
         
         # Save cache
         with open(cache_path, 'w', encoding='utf-8') as f:
@@ -70,12 +77,12 @@ async def generate_ai_insight(results: dict) -> str:
         return insight
     except Exception as e:
         print(f"[parser.py] AI Insight failed: {e}")
-        return "The strategist is currently unavailable, but your metrics are ready review below."
+        return "The strategist is currently unavailable, but your metrics are ready to review below."
 
 
 async def parse_strategy(user_input: str) -> dict:
     """
-    Tries AI first (Async), with caching and regex fallback.
+    Tries AI first (Async) via Gemini, with caching and regex fallback.
     """
     ui_lower = user_input.lower().strip()
     
@@ -88,41 +95,37 @@ async def parse_strategy(user_input: str) -> dict:
                 return json.load(f)
         except: pass
 
-    # ── Try AI (Turbo Mode) ──────────────────────────────────
-    models = ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"]
+    # ── Try AI (Gemini) ──────────────────────────────────
     last_error = None
     
-    for model in models:
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                max_tokens=1000,
-                temperature=0.1,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_input}
-                ],
-                response_format={"type": "json_object"}
-            )
-            raw_text = response.choices[0].message.content.strip()
-            parsed = json.loads(raw_text)
-            
-            if parsed:
-                # Normalize and cache
-                parsed = _normalize(parsed)
-                try:
-                    with open(cache_path, 'w', encoding='utf-8') as f:
-                        json.dump(parsed, f)
-                except: pass
-                return parsed
-            
-        except Exception as e:
-            last_error = e
-            if "429" in str(e): continue
-            else: break
+    try:
+        response = await client.aio.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=user_input,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT,
+                response_mime_type="application/json",
+            ),
+        )
+
+        raw_text = response.text.strip()
+        parsed = json.loads(raw_text)
+        
+        if parsed:
+            # Normalize and cache
+            parsed = _normalize(parsed)
+            try:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(parsed, f)
+            except: pass
+            return parsed
+        
+    except Exception as e:
+        last_error = e
 
     # ── Safety Net: Basic Regex Fallback (If AI is down) ──────
-    # Try to extract ticker from input
+    # Try to extract ticker from input (DO NOT CACHE FALLBACKS)
+    print(f"[parser.py] AI Parsing failed. Falling back to regex. Error: {last_error}")
     detected_ticker = None
     if "bitcoin" in ui_lower or "btc" in ui_lower: detected_ticker = "BTC-USD"
     elif "eth" in ui_lower: detected_ticker = "ETH-USD"
@@ -138,7 +141,7 @@ async def parse_strategy(user_input: str) -> dict:
             "ticker": detected_ticker, "market": "india_equity" if ".NS" in str(detected_ticker) or "^" in str(detected_ticker) else "crypto",
             "indicators": [{"id": "rsi1", "type": "rsi", "params": {"period": 14}}],
             "logic": {"op": "AND", "conditions": [{"left": "rsi1", "op": "lt", "right": 30}]},
-            "notes": "⚠️ AI Busy (Rate Limit). Used basic RSI extraction."
+            "notes": "⚠️ AI Busy. Used basic RSI extraction."
         })
     
     if "ema" in ui_lower or "ma" in ui_lower:
@@ -149,11 +152,11 @@ async def parse_strategy(user_input: str) -> dict:
             "ticker": detected_ticker, "market": "india_equity" if ".NS" in str(detected_ticker) or "^" in str(detected_ticker) else "crypto",
             "indicators": [{"id": "ma1", "type": "ema", "params": {"period": 50}}, {"id": "ma2", "type": "ema", "params": {"period": 200}}],
             "logic": {"op": "AND", "conditions": [{"left": "ma1", "op": "crosses_above", "right": "ma2"}]},
-            "notes": "⚠️ AI Busy (Rate Limit). Used basic MA extraction."
+            "notes": "⚠️ AI Busy. Used basic MA extraction."
         })
         
     # If we get here, AI failed and we have no fallback pattern
-    raise ValueError(f"AI Parse Failed (Rate Limit). Please try again or simplify your request. Error: {last_error}")
+    raise ValueError(f"AI Parse Failed. Please verify your GEMINI_API_KEY and API Limits. Error: {last_error}")
 
 
 def _normalize(parsed: dict) -> dict:
@@ -165,12 +168,12 @@ def _normalize(parsed: dict) -> dict:
     tp  = el.get("take_profit", {})
 
     # 2. Preserve/Initialize DSL keys ONLY if they are part of the core rules
-    # We allow them to be None if not provided, so backtester can decide
-    parsed["indicators"] = parsed.get("indicators")
-    parsed["logic"]      = parsed.get("logic")
+    if "indicators" in parsed:
+        parsed["indicators"] = parsed.get("indicators")
+    if "logic" in parsed:
+        parsed["logic"]      = parsed.get("logic")
 
     # 3. Create unified entry/exit blocks for standard strategies
-    # (The UniversalStrategy will ignore these if DSL is present)
     parsed["entry"] = {
         "indicator":    sp.get("indicator"),
         "condition":    parsed.get("entry_condition", "crosses_above"),

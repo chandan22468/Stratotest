@@ -104,17 +104,19 @@ class UniversalStrategy(BaseStrategy):
         left = _resolve(left_key)
         right = _resolve(right_val)
         
-        if op == "gt":
+        if op == "gt" or op == ">":
             return left > right
-        elif op == "lt":
+        elif op == "lt" or op == "<":
             return left < right
-        elif op == "gte":
+        elif op == "gte" or op == ">=":
             return left >= right
-        elif op == "lte":
+        elif op == "lte" or op == "<=":
             return left <= right
-        elif op == "crosses_above":
+        elif op == "eq" or op == "==":
+            return left == right
+        elif op == "crosses_above" or op == "cross_above":
             return (left > right) & (left.shift(1) <= right.shift(1))
-        elif op == "crosses_below":
+        elif op == "crosses_below" or op == "cross_below":
             return (left < right) & (left.shift(1) >= right.shift(1))
             
         return pd.Series(False, index=df.index)

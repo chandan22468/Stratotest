@@ -11,3 +11,7 @@ pydantic
 requests
 vectorbt
 tiingo
+
+
+
+google-genai

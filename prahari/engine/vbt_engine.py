@@ -55,15 +55,24 @@ def run_vbt_analysis(
         # ── Core metrics via properties ──
         sortino    = _safe_float(pf.sortino_ratio)
         omega      = _safe_float(pf.omega_ratio)
-        profit_factor = _safe_float(pf.profit_factor)
-        max_dd     = _safe_float(pf.max_drawdown * 100) # as pct
+        profit_factor = _safe_float(pf.stats().get('Profit Factor', 0.0))
+        max_dd     = _safe_float(pf.stats().get('Max Drawdown [%]', 0.0))
         
         # Recovery Factor = Total Profit / Max Drawdown
-        total_pnl = pf.total_profit
-        recovery_factor = _safe_float(total_pnl / abs(pf.max_drawdown_abs)) if pf.max_drawdown_abs != 0 else 0.0
+        total_pnl = pf.total_profit() if callable(getattr(pf, "total_profit", None)) else pf.stats().get('Total Return [%]', 0.0)
+        recovery_factor = _safe_float(total_pnl / abs(max_dd)) if max_dd != 0 else 0.0
 
         # Drawdown Duration
-        max_dd_duration = int(pf.stats().get('Max Drawdown Duration', 0))
+        try:
+            mdd = pf.stats().get('Max Drawdown Duration', 0)
+            if hasattr(mdd, 'days'):
+                max_dd_duration = int(mdd.days)
+            elif hasattr(mdd, 'astype'):
+                max_dd_duration = int(mdd.astype('timedelta64[D]') / np.timedelta64(1, 'D'))
+            else:
+                max_dd_duration = int(mdd)
+        except:
+            max_dd_duration = 0
 
         # ── Trade-level metrics via MappedArray ────────────────────
         n_trades = len(pf.trades.records)
@@ -80,7 +89,19 @@ def run_vbt_analysis(
 
             best_trade   = _safe_float(trade_returns.max() * 100)
             worst_trade  = _safe_float(trade_returns.min() * 100)
-            avg_duration = _safe_float(float(np.mean(trade_duration)))
+            
+            # Safely handle timedelta arrays
+            try:
+                mean_dur = np.mean(trade_duration)
+                if hasattr(mean_dur, 'days'):
+                    avg_duration = float(mean_dur.days)
+                elif hasattr(mean_dur, 'astype'):
+                    avg_duration = float(mean_dur.astype('timedelta64[D]') / np.timedelta64(1, 'D'))
+                else:
+                    avg_duration = _safe_float(float(mean_dur))
+            except:
+                avg_duration = 0.0
+                
             expectancy   = _safe_float(float(np.mean(trade_pnl)))
 
         # ── vbt equity curve (timestamped) ─────────────────────────
