@@ -69,55 +69,72 @@ async def _generate_with_fallback(contents, config=None, is_parser=False):
 
 async def agentic_backtest(request_data: Any) -> Any:
     """
-    Experimental 'Deep Agent' loop.
+    Advanced 'Deep Agent' loop (Multi-Turn).
     1. AI initializes strategy
-    2. AI calls tools to verify strategy
-    3. AI proposes tweaks if results are poor
+    2. AI calls tools (Regime, Backtest, Optimize) in sequence
+    3. AI loops until satisfied or max turns reached.
     """
     user_input = request_data.user_input
-    
-    # Define Tools for Gemini
     tools = get_gemini_tools()
     
-    # Start Session
     try:
         chat = client.aio.chats.create(
-            model='gemini-2.0-flash', # Try latest for tools
+            model='gemini-2.0-flash', 
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT + "\n\nCRITICAL: You are in DEEP AGENT mode. Use the 'run_backtest' tool to verify your logic before finishing.",
+                system_instruction=SYSTEM_PROMPT + "\n\nCRITICAL: You are in DEEP AGENT mode. "
+                "1. ALWAYS call 'get_market_regime' first to understand the context. "
+                "2. Use 'run_backtest' to verify your strategy. "
+                "3. If results are poor (Win Rate < 50%), refine and test again. "
+                "4. Once satisfied, output the final JSON and stop calling tools.",
                 tools=tools
             )
         )
         
-        # 1. First Turn: Parse and Test
         response = await chat.send_message(user_input)
         
-        # 2. Handle Tool Calls
-        # (Simplified loop for one tool call turn)
-        if response.candidates[0].content.parts[0].function_call:
-            fc = response.candidates[0].content.parts[0].function_call
-            if fc.name == "run_backtest":
-                tool_res = await run_backtest_tool(**fc.args)
-                # Feed back to AI
-                response = await chat.send_message(
-                    types.Content(
-                        parts=[types.Part(
-                            function_response=types.FunctionResponse(
-                                name="run_backtest",
-                                response={"result": tool_res}
-                            )
-                        )]
+        # Multi-Turn Loop (Max 5 turns)
+        for _ in range(5):
+            parts = response.candidates[0].content.parts
+            # Check if there's a function call
+            f_calls = [p.function_call for p in parts if p.function_call]
+            
+            if not f_calls:
+                break # No more tools, we have the final answer
+                
+            # Handle each function call (usually one at a time)
+            tool_responses = []
+            for fc in f_calls:
+                print(f"[agent] AI calling tool: {fc.name} with {fc.args}")
+                
+                # Route tool calls
+                if fc.name == "run_backtest":
+                    res = await run_backtest_tool(**fc.args)
+                elif fc.name == "get_market_regime":
+                    res = await get_market_regime_tool(**fc.args)
+                elif fc.name == "check_optimizations":
+                    res = check_optimizations_tool(**fc.args)
+                else:
+                    res = "Unknown tool."
+
+                tool_responses.append(
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            name=fc.name,
+                            response={"result": res}
+                        )
                     )
                 )
+            
+            # Send results back to AI
+            response = await chat.send_message(types.Content(parts=tool_responses))
         
-        # 3. Final Answer (Parsed JSON)
+        # Final Parse
         raw_json = response.text.strip()
         parsed = json.loads(raw_json)
         return _normalize(parsed)
 
     except Exception as e:
         print(f"[parser.py] Agentic Loop failed: {e}")
-        # Fallback to standard parse if agentic loop fails
         return await parse_strategy(user_input)
 
 async def generate_ai_insight(results: dict) -> str:
@@ -287,5 +304,9 @@ def _normalize(parsed: dict) -> dict:
         "type":  tp.get("type", "risk_reward"),
         "ratio": tp.get("ratio", 2.0)
     }
+
+    # 4. Preserve Agent Intelligence
+    if "market_regime" in parsed:
+        parsed["market_regime"] = parsed["market_regime"]
 
     return parsed

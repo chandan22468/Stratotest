@@ -285,3 +285,30 @@ class BaseStrategy(ABC):
             strong_body = (open_p - close) > (close.shift(1) - open_p.shift(1)) * 1.5
             is_bear_ob = is_down & is_up.shift(1) & strong_body
             return pd.Series(np.where(is_bear_ob, low.shift(1), np.nan), index=df.index).ffill()
+
+    def _adx(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculates Average Directional Index (ADX)"""
+        high, low, close = df["High"], df["Low"], df["Close"]
+        
+        tr = self._atr(df, 1).rolling(period).mean() # Approximate
+        up_move = high.diff()
+        down_move = low.diff().abs()
+        
+        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+        
+        plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / tr)
+        minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / tr)
+        
+        dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di))
+        return dx.rolling(period).mean()
+
+    def get_market_regime(self, df: pd.DataFrame) -> str:
+        """Classifies market as Trending or Ranging based on ADX"""
+        adx = self._adx(df).iloc[-1]
+        if adx > 25:
+            return "Trending (Strong Momentum)"
+        elif adx > 20:
+            return "Trending (Weakening/Developing)"
+        else:
+            return "Ranging (Sideways/Choppy)"

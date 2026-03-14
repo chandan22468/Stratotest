@@ -383,6 +383,15 @@ if prompt:
         conf_color = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
         st.caption(f"{conf_color} Confidence: {data.get('confidence_reason', 'Analysis complete')}")
 
+        # ── Market Environment Intelligence ───────────────────
+        if data.get("market_regime"):
+            st.markdown(f"""
+            <div style="background-color: #001219; border: 1px solid #005f73; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <span style="color: #94d2bd; font-weight: bold; font-size: 0.8em; letter-spacing: 1.2px;">🌐 AI MARKET INTELLIGENCE</span><br/>
+                <span style="color: #e9d8a6; font-size: 1.1em; font-weight: 500;">{data['market_regime']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
         # ── AI Strategist Insight ─────────────────────────────
         if data.get("ai_insight"):
             st.markdown(f"""

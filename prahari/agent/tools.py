@@ -9,6 +9,8 @@ import numpy as np
 from typing import Dict, List, Any, Callable
 from api.models.request import BacktestRequest
 from api.routes.backtest import backtest as run_backtest_api
+from engine.data import fetch_data
+from engine.strategies.universal import UniversalStrategy
 
 # ── Tool Decorator ───────────────────────────────────────────
 TOOL_REGISTRY = {}
@@ -76,6 +78,26 @@ def check_optimizations_tool(indicator_type: str, current_period: int = 14) -> s
         return f"Optimization Insight: {indicator_type} 50/200 cross is reliable, but a 21/55 faster cross caught more trends on this asset."
         
     return "Calculated neighboring parameters. Current settings are currently optimal."
+
+@tool(
+    name="get_market_regime",
+    description="Detects whether the market for a ticker is Trending or Ranging. Use this to pick between Trend-Following and Mean-Reversion strategies."
+)
+async def get_market_regime_tool(ticker: str = "RELIANCE.NS", timeframe: str = "1h") -> str:
+    """
+    Agentic tool to detect market environment.
+    """
+    try:
+        df = fetch_data(ticker, timeframe, "60d") # Recent data for regime
+        if df.empty:
+            return "Could not fetch data for regime detection."
+        
+        # Use Universal Strategy as a container for the base class methods
+        strat = UniversalStrategy({"indicators":[], "logic":{"op":"AND", "conditions":[]}})
+        regime = strat.get_market_regime(df)
+        return f"Market Regime for {ticker} ({timeframe}): {regime}. Strategy Recommendation: Use {'Trend Following' if 'Trending' in regime else 'Mean Reversion'} techniques."
+    except Exception as e:
+        return f"Regime detection failed: {str(e)}"
 
 def get_gemini_tools() -> List[Dict[str, Any]]:
     """

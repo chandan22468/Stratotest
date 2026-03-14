@@ -179,6 +179,7 @@ You now use a Universal Logic Engine. Define strategies using:
       "stop_loss": {"type": "string", "lookback": 5},
       "take_profit": {"type": "risk_reward", "ratio": 2.0}
   },
+  "market_regime": "string (detected regime info from tool)",
   "notes": "string"
 }
 
