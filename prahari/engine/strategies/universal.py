@@ -59,6 +59,10 @@ class UniversalStrategy(BaseStrategy):
                 results[ind_id] = self._rsi(df["Close"], params.get("period", 14))
             elif ind_type == "atr":
                 results[ind_id] = self._atr(df, params.get("period", 14))
+            elif ind_type == "fvg":
+                results[ind_id] = self._fvg(df, params.get("direction", "bullish"))
+            elif ind_type == "ob":
+                results[ind_id] = self._ob(df, params.get("direction", "bullish"))
             elif ind_type == "close":
                 results[ind_id] = df["Close"]
         

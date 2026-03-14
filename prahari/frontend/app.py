@@ -7,7 +7,7 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 
-API_URL = "http://localhost:8001/api/v1"
+API_URL = "http://localhost:8000/api/v1"
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -334,7 +334,7 @@ if prompt:
                         "initial_capital": 100000,
                         "market":          "india_equity"
                     },
-                    timeout=60 
+                    timeout=120 
                 )
                 
                 if bt_resp.status_code != 200:

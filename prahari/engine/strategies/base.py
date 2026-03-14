@@ -243,3 +243,45 @@ class BaseStrategy(ABC):
             if highs.iloc[i] == window.max():
                 result.iloc[i] = highs.iloc[i]
         return result
+
+    def _fvg(self, df: pd.DataFrame, direction: str = "bullish") -> pd.Series:
+        """
+        Calculates Fair Value Gaps.
+        Bullish FVG: Low of candle 3 > High of candle 1
+        Bearish FVG: High of candle 3 < Low of candle 1
+        Returns the top of the bullish FVG or bottom of the bearish FVG
+        """
+        high, low = df["High"], df["Low"]
+        
+        if direction == "bullish":
+            # Condition: C1 High < C3 Low. FVG Top = C3 Low
+            is_fvg = (low > high.shift(2)) & (df["Close"].shift(1) > df["Open"].shift(1))
+            return pd.Series(np.where(is_fvg, low, np.nan), index=df.index)
+        else:
+            # Condition: C1 Low > C3 High. FVG Bottom = C3 High
+            is_fvg = (high < low.shift(2)) & (df["Close"].shift(1) < df["Open"].shift(1))
+            return pd.Series(np.where(is_fvg, high, np.nan), index=df.index)
+
+    def _ob(self, df: pd.DataFrame, direction: str = "bullish") -> pd.Series:
+        """
+        Calculates Order Blocks.
+        Bullish OB: Last down candle before an up impulse breaking structure.
+        Bearish OB: Last up candle before a down impulse breaking structure.
+        Returns the High (Bull) or Low (Bear) of the OB candle itself.
+        """
+        open_p, close = df["Open"], df["Close"]
+        high, low = df["High"], df["Low"]
+        
+        if direction == "bullish":
+            # Very simplified OB: Down candle followed by strong Up candle.
+            is_down = close < open_p
+            is_up = close > open_p
+            strong_body = (close - open_p) > (open_p.shift(1) - close.shift(1)) * 1.5
+            is_bull_ob = is_up & is_down.shift(1) & strong_body
+            return pd.Series(np.where(is_bull_ob, high.shift(1), np.nan), index=df.index).ffill()
+        else:
+            is_down = close < open_p
+            is_up = close > open_p
+            strong_body = (open_p - close) > (close.shift(1) - open_p.shift(1)) * 1.5
+            is_bear_ob = is_down & is_up.shift(1) & strong_body
+            return pd.Series(np.where(is_bear_ob, low.shift(1), np.nan), index=df.index).ffill()

@@ -129,8 +129,8 @@ You are the Strategic Parser for "Prahari," an AI Backtesting Agent. Your goal i
 
 ### STRATEGY ENGINE (UNIVERSAL DSL)
 You now use a Universal Logic Engine. Define strategies using:
-1. `indicators`: List of indicator blocks (ma, rsi, sma, close, atr).
-2. `logic`: Composable tree of conditions (AND/OR) with operators (gt, lt, gte, lte, crosses_above, crosses_below).
+1. `indicators`: List of indicator blocks (ma, rsi, sma, close, atr, fvg, ob).
+2. `logic`: Composable tree of conditions (AND/OR) with operators (gt, lt, gte, lte, crosses_above, crosses_below, eq).
 
 ### RISK MANAGEMENT LOGIC
 - Stop Loss: Must be one of [swing_low, swing_high, below_ob, below_fvg, atr, percent, pips, fixed]
@@ -167,7 +167,7 @@ You now use a Universal Logic Engine. Define strategies using:
   "interval": "string",
   "period": "string",
   "indicators": [
-    {"id": "string", "type": "string (ema, rsi, sma, close, atr)", "params": {"period": number}}
+    {"id": "string", "type": "string (ema, rsi, sma, close, atr, fvg, ob)", "params": {"period": number}}
   ],
   "logic": {
     "op": "string (AND/OR)",
@@ -195,6 +195,9 @@ Output: {"clarification_needed":false,"question":null,"missing_fields":[],"strat
 
 Input: "backtest nifty with 50 EMA crossing above 200 EMA, 1:2 RR"
 Output: {"clarification_needed":false,"question":null,"missing_fields":[],"strategy_id":"universal","strategy_name":"EMA 50/200 Crossover","ticker":"^NSEI","ticker_name":"Nifty 50","market":"india_equity","interval":"1h","period":"2y","indicators":[{"id":"ma1","type":"ema","params":{"period":50}},{"id":"ma2","type":"ema","params":{"period":200}}],"logic":{"op":"AND","conditions":[{"left":"ma1","op":"crosses_above","right":"ma2"}]},"exit_logic":{"stop_loss":{"type":"swing_low","lookback":5},"take_profit":{"type":"risk_reward","ratio":2.0}},"notes":"Universal EMA Cross"}
+
+Input: "buy when price enters bullish FVG on Gold"
+Output: {"clarification_needed":false,"question":null,"missing_fields":[],"strategy_id":"universal","strategy_name":"Gold Bullish FVG Entry","ticker":"GC=F","ticker_name":"Gold","market":"commodity","interval":"1h","period":"2y","indicators":[{"id":"fvg1","type":"fvg","params":{"direction":"bullish", "period":10}},{"id":"close1","type":"close","params":{}}],"logic":{"op":"AND","conditions":[{"left":"close1","op":"lt","right":"fvg1"}]},"exit_logic":{"stop_loss":{"type":"below_fvg","lookback":5},"take_profit":{"type":"risk_reward","ratio":2.0}},"notes":"FVG Entry Logic"}
 """
 
 AI_STRATEGIST_PROMPT = """

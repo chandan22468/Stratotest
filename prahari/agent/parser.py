@@ -30,6 +30,41 @@ if GEMINI_API_KEY:
 else:
     print("[parser.py] WARNING: GEMINI_API_KEY is not set.")
 
+async def _generate_with_fallback(contents, config=None, is_parser=False):
+    """
+    Tries multiple Gemini models in sequence to mitigate rate limits.
+    """
+    models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    last_err = None
+
+    for model_name in models:
+        try:
+            print(f"[parser.py] Attempting generation with {model_name}...")
+            if is_parser and config:
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config
+                )
+            else:
+                response = await client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents
+                )
+            
+            if response and response.text:
+                return response.text.strip()
+        except Exception as e:
+            print(f"[parser.py] Model {model_name} failed: {e}")
+            last_err = e
+            if "429" not in str(e) and "RESOURCE_EXHAUSTED" not in str(e):
+                # If it's not a rate limit, maybe it's a prompt issue? 
+                # Keep trying other models just in case, or break if it's fatal.
+                pass
+            continue
+            
+    raise last_err
+
 async def generate_ai_insight(results: dict) -> str:
     """
     Generates a professional 'Chief Strategist' take on the backtest results.
@@ -62,13 +97,9 @@ async def generate_ai_insight(results: dict) -> str:
         sortino=round(vbt.get("sortino_ratio", 0), 2)
     )
 
-    # 3. Call LLM (Async)
+    # 3. Call LLM (With Fallback)
     try:
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt_user_content,
-        )
-        insight = response.text.strip()
+        insight = await _generate_with_fallback(prompt_user_content)
         
         # Save cache
         with open(cache_path, 'w', encoding='utf-8') as f:
@@ -95,20 +126,19 @@ async def parse_strategy(user_input: str) -> dict:
                 return json.load(f)
         except: pass
 
-    # ── Try AI (Gemini) ──────────────────────────────────
+    # ── Try AI (Gemini with Fallback) ──────────────────────────
     last_error = None
     
     try:
-        response = await client.aio.models.generate_content(
-            model='gemini-2.5-flash',
+        raw_text = await _generate_with_fallback(
             contents=user_input,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 response_mime_type="application/json",
             ),
+            is_parser=True
         )
 
-        raw_text = response.text.strip()
         parsed = json.loads(raw_text)
         
         if parsed:

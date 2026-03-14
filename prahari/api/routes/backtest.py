@@ -1,6 +1,7 @@
 import asyncio
 import re
 import traceback
+import time
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
@@ -64,7 +65,9 @@ async def backtest(request: BacktestRequest):
             )
 
         # Step 1 — LLM parses strategy
+        t_start = time.time()
         parsed_rules = await parse_strategy(request.user_input)
+        print(f"[debug] Step 1 (Parse) took: {time.time() - t_start:.2f}s")
 
         # Step 2 — Check if clarification is needed
         if parsed_rules.get("clarification_needed"):
@@ -101,11 +104,14 @@ async def backtest(request: BacktestRequest):
         warnings = get_warnings(timeframe, period)
 
         # Step 7 — Fetch data (Market aware + Parallel Hint)
+        t_fetch = time.time()
         if hint_task and ticker == hint_ticker and timeframe == "1h" and period == "2y":
             print(f"[api] Using background hint data for {ticker}...")
             df = await hint_task
         else:
             df = fetch_data(ticker=ticker, timeframe=timeframe, period=period, market=market)
+        print(f"[debug] Step 7 (Fetch) took: {time.time() - t_fetch:.2f}s")
+        
         if df is None or df.empty:
             raise HTTPException(
                 status_code=400,
@@ -113,14 +119,17 @@ async def backtest(request: BacktestRequest):
             )
 
         # Step 8 — Run backtest
+        t_bt = time.time()
         results = run_backtest(
             df=df,
             rules=parsed_rules,
             market=market,
             initial_capital=request.initial_capital
         )
+        print(f"[debug] Step 8 (Backtest) took: {time.time() - t_bt:.2f}s")
 
         # Step 8 — Generate tearsheet
+        t_tear = time.time()
         response = generate_tearsheet(
             results=results,
             df=df,
@@ -129,9 +138,12 @@ async def backtest(request: BacktestRequest):
             timeframe=timeframe,
             period=period
         )
+        print(f"[debug] Step 9 (Tearsheet) took: {time.time() - t_tear:.2f}s")
 
         # Step 9 — Generate AI Strategy Insight (Advanced Upgrade)
+        t_insight = time.time()
         response.ai_insight = await generate_ai_insight(results)
+        print(f"[debug] Step 10 (Insight) took: {time.time() - t_insight:.2f}s")
 
         # Check for zero trade warning from the base engine
         if results.get("warning"):
