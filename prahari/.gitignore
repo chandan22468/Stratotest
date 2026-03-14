@@ -11,3 +11,7 @@ myvenv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Cache
+.cache/
+*.log

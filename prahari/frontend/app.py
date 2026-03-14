@@ -7,7 +7,7 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 
-API_URL = "http://localhost:8000/api/v1"
+API_URL = "http://localhost:8001/api/v1"
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -220,11 +220,19 @@ def render_vbt_metrics(data):
         return
 
     st.markdown("### 🧬 Institutional Analytics (Powered by vectorbt)")
+    
+    # Advanced Metrics Grid
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Sortino Ratio", vbt.get("sortino_ratio") or "0.0")
-    c2.metric("Omega Ratio", vbt.get("omega_ratio") or "0.0")
+    c2.metric("Profit Factor", vbt.get("profit_factor") or "0.0", help="Gross Profit / Gross Loss")
     c3.metric("Expectancy", f"₹{vbt.get('expectancy', 0):,.2f}")
     c4.metric("Avg Duration", f"{vbt.get('avg_trade_duration', 0)} bars")
+
+    bc1, bc2, bc3, bc4 = st.columns(4)
+    bc1.metric("Recovery Factor", vbt.get("recovery_factor") or "0.0", help="Total Profit / Max Drawdown (abs)")
+    bc2.metric("Max DD % (vbt)", f"{vbt.get('max_drawdown_pct', 0)}%")
+    bc3.metric("Max DD Duration", f"{vbt.get('max_dd_duration', 0)} bars")
+    bc4.metric("Omega Ratio", vbt.get("omega_ratio") or "0.0")
 
     bc1, bc2 = st.columns(2)
     bc1.metric("Best Trade %", f"{vbt.get('best_trade_pct', 0)}%", delta_color="normal")
@@ -242,6 +250,14 @@ st.divider()
 
 # ── Sidebar ───────────────────────────────────────────────────
 with st.sidebar:
+    st.markdown("### 🛠️ Controls")
+    if st.button("🗑️ Clear Chat Session", use_container_width=True):
+        st.session_state["messages"] = []
+        st.session_state["prefill"] = None
+        st.rerun()
+        
+    st.divider()
+    st.markdown("### 🚀 Fast Presets")
     st.header("⚙️ Status")
     
     # API status check
@@ -301,30 +317,12 @@ if prompt:
 
     with st.chat_message("assistant"):
 
-        # Step 1 — Parse strategy
-        with st.spinner("🧠 Parsing strategy with AI..."):
+        # Merged Step — Run backtest (includes parsing)
+        with st.spinner("🤖 AI is analyzing and backtesting your strategy..."):
             try:
-                parse_resp = requests.post(
-                    f"{API_URL}/parse",
-                    params={"user_input": prompt},
-                    timeout=30
-                )
-                if parse_resp.status_code == 200:
-                    parsed = parse_resp.json()["parsed_rules"]
-                    with st.expander("📋 Parsed Strategy Rules (JSON)"):
-                        st.json(parsed)
-                else:
-                    st.error(f"Parse failed: {parse_resp.json().get('detail')}")
-                    st.stop()
-            except Exception as e:
-                st.error(f"Parse error: {e}")
-                st.stop()
-
-        # Step 2 — Run backtest
-        with st.spinner("⚡ Running backtest..."):
-            try:
-                # Concatenate messages for context
-                full_input = "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state["messages"]])
+                # Concatenate messages for context - but only last few to avoid confusion
+                history = st.session_state["messages"][-5:] # Last 5 messages for context
+                full_input = "\n".join([f"{m['role']}: {m['content']}" for m in history])
                 
                 bt_resp = requests.post(
                     f"{API_URL}/backtest",
@@ -336,100 +334,98 @@ if prompt:
                         "initial_capital": 100000,
                         "market":          "india_equity"
                     },
-                    timeout=120
+                    timeout=60 
                 )
+                
                 if bt_resp.status_code != 200:
                     st.error(f"Backtest failed: {bt_resp.json().get('detail')}")
                     st.stop()
+                
                 data = bt_resp.json()
+                
+                # Handle Clarification Needed (Exit early and rerun)
+                if data.get("clarification_needed"):
+                    st.session_state["messages"].append({"role": "assistant", "content": data['question']})
+                    st.rerun()
+                
+                # Show parsed rules for transparency
+                if data.get("parsed_rules"):
+                    with st.expander("📋 AI's Interpretation (Logic Rules)"):
+                        st.json(data["parsed_rules"])
+                        
             except Exception as e:
                 st.error(f"Backtest error: {e}")
                 st.stop()
 
-        # Step 3 — Handle Clarification
-        if data.get("clarification_needed"):
-            # Add assistant choice to chat history
-            st.session_state["messages"].append({"role": "assistant", "content": data['question']})
-            st.rerun()  # Rerun to show the question in the chat flow
+        # ── Results Rendering (Only if NOT clarification) ────────
+        if not data.get("metrics"):
+            st.info("No backtest results yet. Please provide more details.")
+            st.stop()
 
         # ── Warnings ──────────────────────────────────────────
         for w in data.get("warnings", []):
             st.warning(w)
 
         # ── Confidence badge ──────────────────────────────────
-        conf = data["confidence"]
+        conf = data.get("confidence", "medium")
         conf_color = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(conf, "⚪")
-        st.caption(f"{conf_color} Confidence: {data['confidence_reason']}")
+        st.caption(f"{conf_color} Confidence: {data.get('confidence_reason', 'Analysis complete')}")
+
+        # ── AI Strategist Insight ─────────────────────────────
+        if data.get("ai_insight"):
+            st.markdown(f"""
+            <div style="background-color: #1e1e1e; border-left: 5px solid #26a69a; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
+                <h4 style='margin-top:0; color:#26a69a;'>💡 Strategist's Take</h4>
+                <p style='font-style: italic; color:#e0e0e0; font-size: 1.1em;'>"{data['ai_insight']}"</p>
+            </div>
+            """, unsafe_allow_html=True)
 
         # ── Key metrics ───────────────────────────────────────
         st.markdown("### 📊 Performance Summary")
         m = data["metrics"]
         c1,c2,c3,c4 = st.columns(4)
-        c1.metric("Total Trades",  m["total_trades"])
-        c2.metric("Win Rate",      f"{m['win_rate']}%")
-        c3.metric("Total Return",  f"{m['total_return_pct']}%")
-        c4.metric("Annual Return", f"{m['annual_return_pct']}%")
+        c1.metric("Total Trades",  m.get("total_trades", 0))
+        c2.metric("Win Rate",      f"{m.get('win_rate', 0)}%")
+        c3.metric("Total Return",  f"{m.get('total_return_pct', 0)}%")
+        c4.metric("Annual Return", f"{m.get('annual_return_pct', 0)}%")
 
         c5,c6,c7,c8 = st.columns(4)
-        c5.metric("Sharpe Ratio",  m["sharpe_ratio"])
-        c6.metric("Max Drawdown",  f"{m['max_drawdown_pct']}%")
-        c7.metric("Profit Factor", m["profit_factor"])
-        c8.metric("Avg RR",        m["avg_rr_achieved"])
-
-        c9,c10,c11,c12 = st.columns(4)
-        c9.metric("Max Consec. Wins",   m["max_consec_wins"])
-        c10.metric("Max Consec. Loss",  m["max_consec_losses"])
-        c11.metric("Avg Win (₹)",       f"₹{m['avg_win_inr']:,.0f}")
-        c12.metric("Avg Loss (₹)",      f"₹{m['avg_loss_inr']:,.0f}")
+        c5.metric("Sharpe Ratio",  m.get("sharpe_ratio", 0))
+        c6.metric("Max Drawdown",  f"{m.get('max_drawdown_pct', 0)}%")
+        c7.metric("Profit Factor", m.get("profit_factor", 0))
+        c8.metric("Avg RR",        m.get("avg_rr_achieved", 0))
 
         # ── Charts ────────────────────────────────────────────
         st.divider()
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📈 Price Chart",
-            "💰 Equity Curve",
-            "📉 Drawdown",
-            "📋 Trade Log",
-            "🎲 Risk Analysis"
+            "📈 Price Chart", "💰 Equity Curve", "📉 Drawdown", "📋 Trade Log", "🎲 Risk Analysis"
         ])
-
-        with tab1:
-            render_price_chart(data)
-        with tab2:
-            render_equity_curve(data)
-        with tab3:
-            render_drawdown(data)
-        with tab4:
-            render_trade_log(data)
-        with tab5:
-            render_monte_carlo(data)
+        with tab1: render_price_chart(data)
+        with tab2: render_equity_curve(data)
+        with tab3: render_drawdown(data)
+        with tab4: render_trade_log(data)
+        with tab5: render_monte_carlo(data)
 
         # ── vectorbt metrics ──────────────────────────────────
         st.divider()
         render_vbt_metrics(data)
 
-        # ── Friction comparison (your killer feature) ─────────
+        # ── Friction comparison ───────────────────────────────
         st.divider()
         st.markdown("### 🔍 Friction Impact (Reality vs Fantasy)")
         fc1, fc2, fc3 = st.columns(3)
-        fc1.metric("Return WITH Friction",
-                   f"{m['total_return_pct']}%",
-                   help="Realistic — includes all costs")
-        fc2.metric("Return WITHOUT Friction",
-                   f"{m['return_without_friction']}%",
-                   help="What most backtesting tools show")
-        fc3.metric("Hidden Cost of Trading",
-                   f"₹{m['total_friction_cost']:,.0f}",
-                   delta=f"-{round(m['return_without_friction'] - m['total_return_pct'], 2)}%",
-                   delta_color="inverse")
+        fc1.metric("Return WITH Friction", f"{m['total_return_pct']}%")
+        fc2.metric("Return WITHOUT Friction", f"{m['return_without_friction']}%")
+        fc3.metric("Hidden Cost", f"₹{m['total_friction_cost']:,.0f}", 
+                   delta=f"-{round(m['return_without_friction'] - m['total_return_pct'], 2)}%", delta_color="inverse")
 
-        # ── Save to chat history ──────────────────────────────
+        # ── Assistant Summary in Chat ─────────────────────────
         summary = (
             f"✅ **{data['strategy_name']}** on {data['ticker']}\n"
-            f"📈 Return: **{m['total_return_pct']}%** | Sharpe: **{m['sharpe_ratio']}** | Trades: **{m['total_trades']}**"
+            f"📈 Return: **{m['total_return_pct']}%** | Sharpe: **{m['sharpe_ratio']}**"
         )
         st.session_state["messages"].append({"role": "assistant", "content": summary})
         
-        # ── Suggested Actions ─────────────────────────────────
         st.markdown("##### 💡 Suggested Next Steps")
         ac1, ac2, ac3 = st.columns(3)
         if ac1.button("Try on 15m", key=f"btn_15m_{prompt}"):

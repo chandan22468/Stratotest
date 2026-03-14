@@ -1,20 +1,68 @@
-# api/routes/backtest.py
+import asyncio
+import re
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from api.models.request import BacktestRequest
 from api.models.response import BacktestResponse
-from agent.parser import parse_strategy
+from agent.parser import parse_strategy, generate_ai_insight
 from engine.data import fetch_data, get_warnings
 from engine.backtester import run_backtest
 from engine.tearsheet import generate_tearsheet
 
 router = APIRouter(tags=["backtest"])
+executor = ThreadPoolExecutor(max_workers=5)
 
+import agent.parser
+import os
+print(f"--- DEBUG: agent.parser file: {agent.parser.__file__}")
+print(f"--- DEBUG: current working dir: {os.getcwd()}")
+
+def _hint_market(ticker: str) -> str:
+    """Guess market for parallel hint"""
+    if any(c in ticker for c in ["-USD", "=X", "GC=F"]):
+        if "-USD" in ticker: return "crypto"
+        if "=X" in ticker: return "forex"
+        return "commodity"
+    return "india_equity"
+
+def _hint_ticker(user_input: str) -> str:
+    """Fast regex hint for parallel data fetching (Turbo)"""
+    ui = user_input.lower()
+    
+    # Use word boundaries to avoid catching "nse" inside "defense" etc.
+    if re.search(r"\b(nifty|nse|nsei)\b", ui): return "^NSEI"
+    if re.search(r"\b(reliance|rel)\b", ui): return "RELIANCE.NS"
+    if re.search(r"\b(tcs)\b", ui): return "TCS.NS"
+    if re.search(r"\b(hdfc)\b", ui): return "HDFCBANK.NS"
+    if re.search(r"\b(infy|infosys)\b", ui): return "INFY.NS"
+    
+    if re.search(r"\b(bitcoin|btc)\b", ui): return "BTC-USD"
+    if re.search(r"\b(eth|ethereum)\b", ui): return "ETH-USD"
+    if re.search(r"\b(sol|solana)\b", ui): return "SOL-USD"
+    if re.search(r"\b(pepe)\b", ui): return "PEPE-USD"
+    
+    if re.search(r"\b(gold|gc)\b", ui): return "GC=F"
+    if re.search(r"\b(silver|si)\b", ui): return "SI=F"
+    if re.search(r"\b(eurusd)\b", ui): return "EURUSD=X"
+    if re.search(r"\b(gbpusd)\b", ui): return "GBPUSD=X"
+    
+    return None
 
 @router.post("/backtest", response_model=BacktestResponse)
 async def backtest(request: BacktestRequest):
     try:
+        # Step 0 — Start Parallel Hint Fetching (TURBO MODE)
+        hint_ticker = _hint_ticker(request.user_input)
+        hint_task = None
+        if hint_ticker:
+            hint_mkt = _hint_market(hint_ticker)
+            # Use defaults ("1h", "2y") for the parallel guess
+            hint_task = asyncio.get_event_loop().run_in_executor(
+                executor, fetch_data, hint_ticker, "1h", "2y", hint_mkt
+            )
+
         # Step 1 — LLM parses strategy
         parsed_rules = await parse_strategy(request.user_input)
 
@@ -44,23 +92,27 @@ async def backtest(request: BacktestRequest):
         timeframe = parsed_rules.get("interval", "1h")
         period    = parsed_rules.get("period", "1y")
 
-        # Step 5 — Get warnings
+        # Step 5 — Detect market from LLM if not specified
+        market = request.market.value
+        if parsed_rules.get("market"):
+            market = parsed_rules["market"]
+
+        # Step 6 — Get warnings
         warnings = get_warnings(timeframe, period)
 
-        # Step 5 — Fetch data
-        df = fetch_data(ticker=ticker, timeframe=timeframe, period=period)
+        # Step 7 — Fetch data (Market aware + Parallel Hint)
+        if hint_task and ticker == hint_ticker and timeframe == "1h" and period == "2y":
+            print(f"[api] Using background hint data for {ticker}...")
+            df = await hint_task
+        else:
+            df = fetch_data(ticker=ticker, timeframe=timeframe, period=period, market=market)
         if df is None or df.empty:
             raise HTTPException(
                 status_code=400,
                 detail=f"No data for '{ticker}' on {timeframe}. Try different timeframe or period."
             )
 
-        # Step 6 — Detect market from LLM if not specified
-        market = request.market.value
-        if parsed_rules.get("market"):
-            market = parsed_rules["market"]
-
-        # Step 7 — Run backtest
+        # Step 8 — Run backtest
         results = run_backtest(
             df=df,
             rules=parsed_rules,
@@ -77,6 +129,9 @@ async def backtest(request: BacktestRequest):
             timeframe=timeframe,
             period=period
         )
+
+        # Step 9 — Generate AI Strategy Insight (Advanced Upgrade)
+        response.ai_insight = await generate_ai_insight(results)
 
         response.warnings = warnings + response.warnings
         return response

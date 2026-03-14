@@ -16,6 +16,7 @@ from engine.strategies.strategies import (
     CHoCHStrategy,
     BOSPullbackStrategy
 )
+from engine.strategies.universal import UniversalStrategy
 from engine.vbt_engine import run_vbt_analysis
 
 # ── Strategy registry ─────────────────────────────────────────
@@ -35,6 +36,7 @@ STRATEGY_MAP = {
     "fvg":               FVGStrategy,
     "choch":             CHoCHStrategy,
     "bos_pullback":      BOSPullbackStrategy,
+    "universal":         UniversalStrategy,
 }
 
 
@@ -57,11 +59,16 @@ def run_backtest(
     StrategyClass = STRATEGY_MAP.get(strategy_id)
 
     if not StrategyClass:
-        # Try to find closest match
-        for key in STRATEGY_MAP:
-            if key in strategy_id or strategy_id in key:
-                StrategyClass = STRATEGY_MAP[key]
-                break
+        # Check if it's a DSL request (has indicators or logic keys)
+        if "indicators" in rules or "logic" in rules:
+            StrategyClass = UniversalStrategy
+        else:
+            # Try to find closest match
+            for key in STRATEGY_MAP:
+                if key in strategy_id or strategy_id in key:
+                    StrategyClass = STRATEGY_MAP[key]
+                    break
+        
         if not StrategyClass:
             StrategyClass = MACrossoverStrategy  # safe fallback
 

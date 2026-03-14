@@ -52,9 +52,18 @@ def run_vbt_analysis(
             slippage=0.001,     # 0.1% slippage
         )
 
-        # ── Core metrics via properties (not callable in this vbt version) ──
+        # ── Core metrics via properties ──
         sortino    = _safe_float(pf.sortino_ratio)
         omega      = _safe_float(pf.omega_ratio)
+        profit_factor = _safe_float(pf.profit_factor)
+        max_dd     = _safe_float(pf.max_drawdown * 100) # as pct
+        
+        # Recovery Factor = Total Profit / Max Drawdown
+        total_pnl = pf.total_profit
+        recovery_factor = _safe_float(total_pnl / abs(pf.max_drawdown_abs)) if pf.max_drawdown_abs != 0 else 0.0
+
+        # Drawdown Duration
+        max_dd_duration = int(pf.stats().get('Max Drawdown Duration', 0))
 
         # ── Trade-level metrics via MappedArray ────────────────────
         n_trades = len(pf.trades.records)
@@ -88,6 +97,10 @@ def run_vbt_analysis(
         return {
             "sortino_ratio":      round(sortino, 3),
             "omega_ratio":        round(omega, 3),
+            "profit_factor":      round(profit_factor, 3),
+            "max_drawdown_pct":   round(max_dd, 3),
+            "recovery_factor":    round(recovery_factor, 3),
+            "max_dd_duration":    max_dd_duration,
             "expectancy":         round(expectancy, 2),
             "best_trade_pct":     round(best_trade, 3),
             "worst_trade_pct":    round(worst_trade, 3),

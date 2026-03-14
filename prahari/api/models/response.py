@@ -52,6 +52,10 @@ class MonteCarloData(BaseModel):
 class VbtAnalytics(BaseModel):
     sortino_ratio:       Optional[float] = None
     omega_ratio:         Optional[float] = None
+    profit_factor:       Optional[float] = None
+    max_drawdown_pct:    Optional[float] = None
+    recovery_factor:     Optional[float] = None
+    max_dd_duration:     Optional[int]   = None
     expectancy:          Optional[float] = None
     best_trade_pct:      Optional[float] = None
     worst_trade_pct:     Optional[float] = None
@@ -78,3 +82,4 @@ class BacktestResponse(BaseModel):
     confidence:      Optional[str] = None
     confidence_reason: Optional[str] = None
     vbt_analytics:   Optional[VbtAnalytics] = None
+    ai_insight:      Optional[str] = None

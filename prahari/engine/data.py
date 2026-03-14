@@ -4,6 +4,17 @@
 
 import yfinance as yf
 import pandas as pd
+import os
+from datetime import datetime, timedelta
+from tiingo import TiingoClient
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# ── Tiingo Client Setup ───────────────────────────────────────
+TIINGO_API_KEY = os.getenv("TIINGO_API_KEY", "")
+tiingo_config = {'api_key': TIINGO_API_KEY, 'session': True}
+tiingo_client = TiingoClient(tiingo_config)
 
 # ── Timeframe config ──────────────────────────────────────────
 TIMEFRAME_CONFIG = {
@@ -81,17 +92,53 @@ PERIOD_DAYS = {
 }
 
 
-def fetch_data(ticker: str, timeframe: str, period: str) -> pd.DataFrame:
+# ── Caching Config ───────────────────────────────────────────
+CACHE_DIR = os.path.join(os.getcwd(), ".cache", "data")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def fetch_data(ticker: str, timeframe: str, period: str, market: str = "india_equity") -> pd.DataFrame:
     """
-    Fetches OHLCV data for given ticker, timeframe and period.
-    Returns clean DataFrame: Open, High, Low, Close, Volume
-    Returns None if fetch fails.
+    Fetches OHLCV data with smart caching.
+    Routes between Tiingo and Yahoo Finance based on detected market.
     """
     config = TIMEFRAME_CONFIG.get(timeframe)
     if not config:
         raise ValueError(f"Unsupported timeframe: {timeframe}. Supported: {list(TIMEFRAME_CONFIG.keys())}")
 
-    # Cap period to what yfinance supports for this timeframe
+    # 0. Check Cache
+    cache_file = f"{ticker.replace('^', '').replace('=', '')}_{timeframe}_{period}.parquet".lower()
+    cache_path = os.path.join(CACHE_DIR, cache_file)
+    
+    if os.path.exists(cache_path):
+        # Cache TTL: 4h for intraday, 24h for daily+
+        mtime = datetime.fromtimestamp(os.path.getmtime(cache_path))
+        ttl_hours = 4 if "m" in timeframe or "h" in timeframe else 24
+        if datetime.now() - mtime < timedelta(hours=ttl_hours):
+            print(f"[data.py] Loading {ticker} from cache...")
+            return pd.read_parquet(cache_path)
+
+    # 1. Routing Logic: Prioritize Tiingo for non-Indian markets
+    df = None
+    is_major_crypto = any(c in ticker.upper() for c in ["BTC", "ETH", "USDT", "STETH", "SOL"])
+    is_intl_market = market in ("crypto", "forex", "us_equity", "commodity")
+    
+    if (is_intl_market or is_major_crypto) and TIINGO_API_KEY and TIINGO_API_KEY != "paste_your_tiingo_api_key_here":
+        # Try Tiingo for Crypto/US/Forex
+        df = _fetch_from_tiingo(ticker, timeframe, period, market)
+    
+    if df is None or df.empty:
+        # 2. Fallback to Yahoo Finance (Always used for india_equity or if Tiingo fails)
+        df = _fetch_from_yahoo(ticker, timeframe, period)
+
+    # 3. Save to Cache if successful
+    if df is not None and not df.empty:
+        df.to_parquet(cache_path)
+    
+    return df
+
+
+def _fetch_from_yahoo(ticker: str, timeframe: str, period: str) -> pd.DataFrame:
+    config = TIMEFRAME_CONFIG.get(timeframe)
     actual_period = _cap_period(period, config["max_period"])
 
     try:
@@ -106,22 +153,95 @@ def fetch_data(ticker: str, timeframe: str, period: str) -> pd.DataFrame:
         if df is None or df.empty:
             return None
 
-        # Fix MultiIndex columns from yfinance
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # Keep only OHLCV
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
         df.dropna(inplace=True)
 
-        # Resample 1H → 4H if needed
         if timeframe == "4h":
             df = _resample_to_4h(df)
 
         return df
 
     except Exception as e:
-        print(f"[data.py] Failed to fetch {ticker} {timeframe}: {e}")
+        print(f"[data.py] Yahoo Finance failed for {ticker}: {e}")
+        return None
+
+
+def _fetch_from_tiingo(ticker: str, timeframe: str, period: str, market: str) -> pd.DataFrame:
+    """Fetch from Tiingo API with proper market-specific ticker normalization"""
+    # 1. Normalize Ticker for Tiingo
+    t = ticker.upper()
+    if market == "crypto":
+        t = t.replace("-USD", "usd").replace("-", "").lower()
+    elif market == "forex":
+        t = t.replace("=X", "").lower()
+    else:
+        t = t.upper() # Stocks use upper case typically
+
+    # 2. Map timeframe to Tiingo resampleFreq
+    resample_map = {
+        "1m": "1min", "5m": "5min", "15m": "15min", 
+        "30m": "30min", "1h": "1hour", "1d": "daily"
+    }
+    freq = resample_map.get(timeframe, "1hour")
+    
+    # 3. Handle periods
+    days_map = PERIOD_DAYS.get(period, 730)
+    start_date = (datetime.now() - timedelta(days=days_map)).strftime('%Y-%m-%d')
+    
+    try:
+        price_data = []
+        if market == "crypto":
+             price_data = tiingo_client.get_crypto_price_history(
+                tickers=[t], startDate=start_date, resampleFreq=freq
+            )
+        elif market == "forex":
+            price_data = tiingo_client.get_forex_price_history(
+                tickers=[t], startDate=start_date, resampleFreq=freq
+            )
+        else:
+            # US Stocks / Commodities
+            price_data = tiingo_client.get_ticker_price(
+                t, startDate=start_date, resampleFreq=freq
+            )
+
+        if not price_data: return None
+        
+        # Tiingo returns data specifically for the ticker
+        # If multiple tickers requested, it's a list of dicts with 'ticker' key
+        # If single, it's a list of bars
+        if isinstance(price_data, list) and len(price_data) > 0 and 'priceData' in price_data[0]:
+            actual_bars = price_data[0]['priceData']
+        else:
+            actual_bars = price_data
+
+        df = pd.DataFrame(actual_bars)
+        if df.empty: return None
+
+        # Clean columns
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
+        
+        # Map Tiingo columns to Prahari columns
+        # Tiingo: open, high, low, close, volume (sometimes adjClose)
+        rename_map = {
+            'open': 'Open', 'high': 'High', 'low': 'Low', 
+            'close': 'Close', 'volume': 'Volume'
+        }
+        df = df.rename(columns=rename_map)
+        
+        # Ensure only core columns
+        valid = ["Open", "High", "Low", "Close", "Volume"]
+        df = df[[c for c in valid if c in df.columns]]
+        df.dropna(inplace=True)
+
+        print(f"[data.py] Successfully fetched {len(df)} bars from Tiingo for {ticker}")
+        return df
+
+    except Exception as e:
+        print(f"[data.py] Tiingo failed for {ticker}: {e}")
         return None
 
 
