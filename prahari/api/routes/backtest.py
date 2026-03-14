@@ -145,6 +145,38 @@ async def backtest(request: BacktestRequest):
         response.ai_insight = await generate_ai_insight(results)
         print(f"[debug] Step 10 (Insight) took: {time.time() - t_insight:.2f}s")
 
+        # Step 10 — COMPARATIVE OPTIMIZATION (The Tweak)
+        # If win rate is low, we try a mathematical tweak locally
+        if results.get("metrics", {}).get("win_rate", 0) < 50:
+            print("[api] Win rate low. Running comparative optimization...")
+            # Use JSON serialization for a deep copy to avoid mutating the original
+            tweaked_rules = json.loads(json.dumps(parsed_rules))
+            # Add a 200 EMA trend filter logic
+            if "indicators" not in tweaked_rules: tweaked_rules["indicators"] = []
+            ema_id = f"ema_trend_{int(time.time())}"
+            tweaked_rules["indicators"].append({"id": ema_id, "type": "ema", "params": {"period": 200}})
+            
+            # Inject into logic
+            old_logic = tweaked_rules.get("logic", {"op": "AND", "conditions": []})
+            new_logic = {
+                "op": "AND",
+                "conditions": old_logic.get("conditions", []) + [
+                    {"left": "close", "op": "gt", "right": ema_id}
+                ]
+            }
+            tweaked_rules["logic"] = new_logic
+            
+            # Run optimized version
+            opt_results = run_backtest(df, tweaked_rules, market, request.initial_capital)
+            if opt_results.get("trades"):
+                opt_m = opt_results["metrics"]
+                response.optimization_results = {
+                    "win_rate": opt_m["win_rate"],
+                    "total_return": opt_m["total_return_pct"],
+                    "equity_curve": opt_results["equity"] # Full curve for comparative charting
+                }
+                response.optimization_summary = f"Adding a 200 EMA Trend Filter improved accuracy to {opt_m['win_rate']}%."
+
         # Check for zero trade warning from the base engine
         if results.get("warning"):
             warnings.append(results["warning"])

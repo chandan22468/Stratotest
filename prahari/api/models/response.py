@@ -83,3 +83,5 @@ class BacktestResponse(BaseModel):
     confidence_reason: Optional[str] = None
     vbt_analytics:   Optional[VbtAnalytics] = None
     ai_insight:      Optional[str] = None
+    optimization_results: Optional[Dict[str, Any]] = None # Holds tweaked stats for comparison
+    optimization_summary: Optional[str] = None           # Summary of the improvement

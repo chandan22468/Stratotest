@@ -5,9 +5,11 @@
 import json
 import os
 import hashlib
+from typing import Any
 from google import genai
 from google.genai import types
 from agent.prompts import SYSTEM_PROMPT, AI_STRATEGIST_PROMPT
+from agent.tools import TOOL_REGISTRY, run_backtest_tool, check_optimizations_tool, get_gemini_tools
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -65,6 +67,59 @@ async def _generate_with_fallback(contents, config=None, is_parser=False):
             
     raise last_err
 
+async def agentic_backtest(request_data: Any) -> Any:
+    """
+    Experimental 'Deep Agent' loop.
+    1. AI initializes strategy
+    2. AI calls tools to verify strategy
+    3. AI proposes tweaks if results are poor
+    """
+    user_input = request_data.user_input
+    
+    # Define Tools for Gemini
+    tools = get_gemini_tools()
+    
+    # Start Session
+    try:
+        chat = client.aio.chats.create(
+            model='gemini-2.0-flash', # Try latest for tools
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_PROMPT + "\n\nCRITICAL: You are in DEEP AGENT mode. Use the 'run_backtest' tool to verify your logic before finishing.",
+                tools=tools
+            )
+        )
+        
+        # 1. First Turn: Parse and Test
+        response = await chat.send_message(user_input)
+        
+        # 2. Handle Tool Calls
+        # (Simplified loop for one tool call turn)
+        if response.candidates[0].content.parts[0].function_call:
+            fc = response.candidates[0].content.parts[0].function_call
+            if fc.name == "run_backtest":
+                tool_res = await run_backtest_tool(**fc.args)
+                # Feed back to AI
+                response = await chat.send_message(
+                    types.Content(
+                        parts=[types.Part(
+                            function_response=types.FunctionResponse(
+                                name="run_backtest",
+                                response={"result": tool_res}
+                            )
+                        )]
+                    )
+                )
+        
+        # 3. Final Answer (Parsed JSON)
+        raw_json = response.text.strip()
+        parsed = json.loads(raw_json)
+        return _normalize(parsed)
+
+    except Exception as e:
+        print(f"[parser.py] Agentic Loop failed: {e}")
+        # Fallback to standard parse if agentic loop fails
+        return await parse_strategy(user_input)
+
 async def generate_ai_insight(results: dict) -> str:
     """
     Generates a professional 'Chief Strategist' take on the backtest results.
@@ -96,6 +151,17 @@ async def generate_ai_insight(results: dict) -> str:
         max_drawdown=round(m.get("max_drawdown_pct", 0), 2),
         sortino=round(vbt.get("sortino_ratio", 0), 2)
     )
+
+    # 2.5 ADD PROACTIVE TWEAK ADVICE
+    # Based on results, we suggest a mathematical tweak
+    tweak_note = ""
+    win_rate = m.get("win_rate", 0)
+    if win_rate < 45:
+        tweak_note = "\n\n💡 PROACTIVE TWEAK: Your win rate is currently low. I recommend adding a 200 EMA filter to ensure you only trade in the direction of the major trend, or tightening your stop loss slightly."
+    elif win_rate > 70 and results.get("trades", 0) < 5:
+        tweak_note = "\n\n💡 PROACTIVE TWEAK: Results look great but the sample size is very small. Consider increasing the 'period' to verify this isn't just a lucky streak."
+    
+    prompt_user_content += tweak_note
 
     # 3. Call LLM (With Fallback)
     try:

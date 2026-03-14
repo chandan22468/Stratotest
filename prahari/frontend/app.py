@@ -116,11 +116,23 @@ def render_equity_curve(data):
         fill="tozeroy",
         fillcolor="rgba(38,166,154,0.15)",
         line=dict(color="#26a69a", width=2),
-        name="Portfolio Value"
+        name="Portfolio Value (Original)"
     ))
+    
+    # ── Agentic Tweak Comparison ────────────────────────────
+    if data.get("optimization_results") and "equity_curve" in data["optimization_results"]:
+        opt = data["optimization_results"]
+        # Use the same index as original for alignment
+        fig.add_trace(go.Scatter(
+            x=[e["time"] for e in curve[:len(opt["equity_curve"])]],
+            y=opt["equity_curve"],
+            line=dict(color="#ffa726", width=2, dash="dot"),
+            name="🤖 Agent Tweak (Optimized)"
+        ))
+
     fig.update_layout(
         template="plotly_dark", height=350,
-        title="💰 Equity Curve",
+        title="💰 Equity Curve Comparison",
         yaxis_title="Portfolio Value (₹)"
     )
 
@@ -131,8 +143,8 @@ def render_equity_curve(data):
         fig.add_trace(go.Scatter(
             x=[v["time"] for v in veq],
             y=[v["value"] for v in veq],
-            line=dict(color="#ff9800", width=1, dash="dash"),
-            name="vectorbt Comparison"
+            line=dict(color="#9e9e9e", width=1, dash="dash"),
+            name="vectorbt Engine"
         ))
 
     st.plotly_chart(fig, use_container_width=True)
@@ -377,6 +389,27 @@ if prompt:
             <div style="background-color: #1e1e1e; border-left: 5px solid #26a69a; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
                 <h4 style='margin-top:0; color:#26a69a;'>💡 Strategist's Take</h4>
                 <p style='font-style: italic; color:#e0e0e0; font-size: 1.1em;'>"{data['ai_insight']}"</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        # ── COMPARATIVE OPTIMIZATION (The Tweak) ──────────────
+        if data.get("optimization_results"):
+            opt = data["optimization_results"]
+            st.markdown(f"""
+            <div style="background-color: #0d1b2a; border: 1px solid #415a77; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
+                <h4 style='margin-top:0; color:#e0e1dd;'>🤖 Agent Optimization Found</h4>
+                <p style='color:#e0e1dd;'>{data.get("optimization_summary", "Better parameters detected.")}</p>
+                <div style="display: flex; gap: 20px;">
+                    <div>
+                        <span style="color:#778da9;">Original Win Rate</span><br/>
+                        <span style="font-size: 1.5em; font-weight: bold; color:#e0e0e0;">{m.get('win_rate')}%</span>
+                    </div>
+                    <div style="font-size: 2em; color:#415a77;">→</div>
+                    <div>
+                        <span style="color:#1b4332;">Optimized Win Rate</span><br/>
+                        <span style="font-size: 1.5em; font-weight: bold; color:#2d6a4f;">{opt['win_rate']}%</span>
+                    </div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
